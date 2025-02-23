@@ -1,118 +1,138 @@
 import os
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder
+from sklearn.model_selection import train_test_split
 import tensorflow as tf
 import json
+from tensorflow import keras
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv1D, BatchNormalization, Dropout, Flatten, Dense
 
 # Paths to your CSV files
-WEATHER_PATH = "/home/souvik-sengupta/vs_code/Tutorial_FTL/dataset/IoT_Weather.csv"
-WEATHER_IN_PATH = "/home/souvik-sengupta/vs_code/Tutorial_FTL/dataset/IoT_Weather(in).csv"
+WEATHER_PATH = "dataset/IoT_Weather.csv"
+WEATHER_IN_PATH = "dataset/IoT_Weather(in).csv"
 
-# Where to save weights after pre-training
-OUTPUT_WEIGHTS = "pretrained_global_model.weights.h5"  # Fixed the filename issue
+OUTPUT_WEIGHTS = "pretrained_global_model.weights.h5"
 PRETRAIN_INFO = "server_pretrain_info.json"
 
 # ------------------------------------------------------------------------------
-# 1. Utility: Load CSV as NumPy arrays
+# 1. Load CSV Data and Preprocess
 # ------------------------------------------------------------------------------
-def load_data_from_csv(csv_path, label_column="type"):
-    df = pd.read_csv(csv_path)
+def load_data_from_csv():
+    try:
+        df1 = pd.read_csv(WEATHER_PATH)
+        df2 = pd.read_csv(WEATHER_IN_PATH)
+        df = pd.concat([df1, df2], ignore_index=True)
+    except Exception as e:
+        print(f"❌ Error loading CSV files: {e}")
+        return None
 
-    # Drop non-numeric columns if they exist
-    if "date" in df.columns:
-        df.drop(columns=["date"], inplace=True)
-    if "time" in df.columns:
-        df.drop(columns=["time"], inplace=True)
+    if 'type' not in df.columns:
+        raise ValueError("❌ 'type' column missing in dataset. Check dataset structure.")
 
-    # Ensure the label column exists
-    if label_column not in df.columns:
-        raise ValueError(f"Label column '{label_column}' not found in {csv_path}. Available columns: {df.columns}")
+    num_classes = df['type'].nunique()
+    print(f"✅ Number of classes: {num_classes}")
 
-    # Convert categorical labels to integers
-    df[label_column] = df[label_column].astype('category').cat.codes
+    # Encode labels
+    label_encoder = LabelEncoder()
+    df['type_encoded'] = label_encoder.fit_transform(df['type'])
 
-    # Fill missing values (if any) with column mean
-    df.fillna(df.mean(), inplace=True)
+    # Fix missing feature columns
+    required_features = ['pressure', 'humidity']
+    missing_features = [col for col in required_features if col not in df.columns]
+    if missing_features:
+        raise ValueError(f"❌ Missing required features: {missing_features}")
 
-    # Ensure all columns are numeric
-    for col in df.columns:
-        if df[col].dtype == object:
-            raise ValueError(f"Non-numeric column detected: {col}. Check data preprocessing.")
+    # Encode 'humidity' if necessary
+    if 'humidity' in df.columns:
+        df['humidity_encoded'] = LabelEncoder().fit_transform(df['humidity'])
+    else:
+        df['humidity_encoded'] = 0
 
-    X = df.drop(columns=[label_column]).values
-    y = df[label_column].values
+    # Select and normalize features
+    feature_columns = ['pressure', 'humidity_encoded']
+    X = df[feature_columns]
+    Y = df['type_encoded']
 
-    return X, y
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Ensure valid shape for Conv1D (samples, timesteps, features)
+    if X_scaled.shape[1] < 2:
+        raise ValueError("❌ Insufficient features after preprocessing.")
+
+    X_scaled = X_scaled.reshape(X_scaled.shape[0], X_scaled.shape[1], 1)  # Reshape for Conv1D
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_scaled, Y, test_size=0.2, random_state=42, stratify=Y
+    )
+
+    print(f"✅ Data Shapes - X_train: {X_train.shape}, y_train: {y_train.shape}")
+    print(f"✅ Data Shapes - X_test: {X_test.shape}, y_test: {y_test.shape}")
+
+    return (X_train, y_train, X_test, y_test), num_classes
 
 # ------------------------------------------------------------------------------
-# 2. Model Definition for Tabular Data (MLP)
+# 2. Model Definition
 # ------------------------------------------------------------------------------
-def create_base_model(input_dim, num_classes):
-    inputs = tf.keras.Input(shape=(input_dim,))
+def create_base_model(input_shape, num_classes):
+    print(f"✅ Creating model with input shape: {input_shape}")
 
-    x = tf.keras.layers.Dense(64, activation='relu')(inputs)
-    x = tf.keras.layers.Dense(32, activation='relu')(x)
+    model = Sequential([
+        Conv1D(filters=64, kernel_size=1, activation='relu', input_shape=input_shape),
+        BatchNormalization(),
+        Dropout(0.2),
+        Conv1D(filters=128, kernel_size=1, activation='relu'),
+        BatchNormalization(),
+        Dropout(0.2),
+        Flatten(),
+        Dense(128, activation='relu'),
+        Dropout(0.3),
+        Dense(num_classes, activation='softmax')
+    ])
 
-    outputs = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
+    model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=0.0001),
+        loss=keras.losses.SparseCategoricalCrossentropy(),
+        metrics=[keras.metrics.SparseCategoricalAccuracy()]
+    )
 
-    model = tf.keras.Model(inputs=inputs, outputs=outputs)
     return model
 
 # ------------------------------------------------------------------------------
-# 3. Pre-train on WEATHER and WEATHER_IN
+# 3. Pretrain the Global Model
 # ------------------------------------------------------------------------------
 def pretrain_global_model():
-    # Load the two CSVs
-    X_w, y_w = load_data_from_csv(WEATHER_PATH)
-    X_win, y_win = load_data_from_csv(WEATHER_IN_PATH)
+    data = load_data_from_csv()
+    
+    if data is None:
+        print("❌ Data loading failed. Exiting pretraining.")
+        return
 
-    # Combine the features and labels
-    X_combined = np.concatenate([X_w, X_win], axis=0)
-    y_combined = np.concatenate([y_w, y_win], axis=0)
+    (X_train, y_train, X_test, y_test), num_classes = data
+    input_shape = (X_train.shape[1], X_train.shape[2])  # (timesteps, features)
 
-    # Ensure labels are integer
-    y_combined = y_combined.astype(int)
+    model = create_base_model(input_shape, num_classes)
 
-    # Handle NaN values
-    X_combined = np.nan_to_num(X_combined)
+    # Convert data into TensorFlow Dataset
+    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(32)
+    val_dataset = tf.data.Dataset.from_tensor_slices((X_test, y_test)).batch(32)
 
-    # Determine number of classes
-    num_classes = len(np.unique(y_combined))
-    print("Detected number of classes:", num_classes)
+    print("🚀 Starting pretraining of the global model...")
+    model.fit(train_dataset, validation_data=val_dataset, epochs=10)
 
-    # Create the model
-    input_dim = X_combined.shape[1]
-    model = create_base_model(input_dim, num_classes)
-
-    # Compile the model
-    model.compile(
-        optimizer='adam',
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
-
-    # Fit (pre-train) the model
-    model.fit(
-        X_combined,
-        y_combined,
-        epochs=5,
-        batch_size=32,
-        validation_split=0.1
-    )
-
-    # Save the weights (Fixed filename issue)
+    # Save model weights
     model.save_weights(OUTPUT_WEIGHTS)
+    print(f"✅ Pre-trained global model saved to {OUTPUT_WEIGHTS}")
 
-    # Save model metadata for later use
-    metadata = {
-        "num_features": input_dim,
-        "num_classes": num_classes
-    }
+    # Save metadata for clients
+    metadata = {"num_features": X_train.shape[1], "num_classes": num_classes}
     with open(PRETRAIN_INFO, 'w') as f:
         json.dump(metadata, f)
 
-    print(f"Pre-trained global model saved to {OUTPUT_WEIGHTS}")
-    print(f"Metadata saved to {PRETRAIN_INFO}")
+    print(f"✅ Metadata saved to {PRETRAIN_INFO}")
 
+# Run the pretraining process
 if __name__ == "__main__":
     pretrain_global_model()

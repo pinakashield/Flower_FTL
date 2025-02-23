@@ -4,18 +4,9 @@ import flwr as fl
 import tensorflow as tf
 import json
 import os
+import logging
 
-def deserialize_weights(received_parameters):
-    """Convert received binary serialized weights into NumPy arrays"""
-    weights = []
-    
-    # Iterate over each serialized tensor in parameters
-    for tensor in received_parameters.tensors:
-        tensor_stream = io.BytesIO(tensor)  # Convert binary data to a byte stream
-        numpy_array = np.load(tensor_stream, allow_pickle=True)  # Deserialize to NumPy
-        weights.append(numpy_array)
-    
-    return weights
+logging.basicConfig(level=logging.INFO)
 
 # ---------------------------- STEP 1: LOAD SERVER INFO ---------------------------- #
 # Ensure server_pretrain_info.json exists
@@ -53,17 +44,31 @@ if num_classes is None:
 
 print(f"✅ Loaded pretrain info: {num_features} features, {num_classes} classes")
 
-# ---------------------------- STEP 2: DEFINE SERVER MODEL ---------------------------- #
-server_model = tf.keras.Sequential([
-    tf.keras.layers.Dense(64, activation='relu', input_shape=(num_features,)),
-    tf.keras.layers.Dense(32, activation='relu', name="shared_layer"),
-    tf.keras.layers.Dense(num_classes, activation='softmax')
-])
 
-server_model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+# ---------------------------- STEP 2: DEFINE SERVER MODEL ---------------------------- #
+def create_server_model(num_features, num_classes):
+    model = tf.keras.Sequential([
+        tf.keras.layers.Conv1D(filters=64, kernel_size=1, activation='relu', input_shape=(num_features, 1)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(0.2),
+        tf.keras.layers.Conv1D(filters=128, kernel_size=1, activation='relu'),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(0.2),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(128, activation='relu'),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.Dense(num_classes, activation='softmax')
+    ])
+    
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+
+# Create the server model
+server_model = create_server_model(num_features, num_classes)
 
 # Ensure model is built before loading weights
-server_model.build((None, num_features))
+server_model.build((None, num_features, 1))
 
 # Load pretrained weights safely
 try:
@@ -73,12 +78,27 @@ except Exception as e:
     print(f"⚠️ Warning: Could not load weights. Error: {e}")
 
 # Debugging: Print model weights before starting server
-print(f"🔍 Server Model Initial Weights: {len(server_model.get_weights())} layers initialized.")
+for i, w in enumerate(server_model.get_weights()):
+    print(f"🔍 Server Model Layer {i}: Shape {w.shape}, Mean {np.mean(w):.5f}")
 
-# ---------------------------- STEP 3: DEFINE FEDERATED TRANSFER LEARNING STRATEGY ---------------------------- #
+
+# ---------------------------- STEP 3: DEFINE WEIGHT DESERIALIZATION FUNCTION ---------------------------- #
+def deserialize_weights(received_parameters):
+    """Convert received binary serialized weights into NumPy arrays"""
+    weights = []
+    
+    for tensor in received_parameters.tensors:
+        tensor_stream = io.BytesIO(tensor)  # Convert binary data to a byte stream
+        numpy_array = np.load(tensor_stream, allow_pickle=True)  # Deserialize to NumPy
+        weights.append(numpy_array)
+    
+    return weights
+
+
+# ---------------------------- STEP 4: DEFINE FEDERATED TRANSFER LEARNING STRATEGY ---------------------------- #
 class FTLStrategy(fl.server.strategy.FedAvg):
     def aggregate_fit(self, server_round, results, failures):
-        """Aggregate only the shared layer from clients' updates."""
+        """Aggregate only the shared layers from clients' updates."""
         if failures:
             print(f"⚠️ Warning: {len(failures)} clients failed in round {server_round}")
 
@@ -98,19 +118,30 @@ class FTLStrategy(fl.server.strategy.FedAvg):
 
         # Aggregate weights layer-wise
         aggregated_weights = [np.mean([client[i] for client in client_weights], axis=0)
-                              for i in range(num_layers)]
+            for i in range(num_layers)]
+
+        # Debugging: Check aggregated weights
+        for i, w in enumerate(aggregated_weights):
+            print(f"🔍 Aggregated Layer {i}: Shape {w.shape}, Mean {np.mean(w):.5f}")
 
         return fl.common.ndarrays_to_parameters(aggregated_weights), {}
 
-# ---------------------------- STEP 4: START FEDERATED LEARNING SERVER ---------------------------- #
+
+# ---------------------------- STEP 5: START FEDERATED LEARNING SERVER ---------------------------- #
 strategy = FTLStrategy(
     min_available_clients=2,
     min_fit_clients=2,
     min_evaluate_clients=2,
 )
 
+# Log server start
+logging.info("🚀 Starting Flower federated learning server...")
+
+# Start Flower Server
 fl.server.start_server(
-    server_address="0.0.0.0:11080",
+    server_address="0.0.0.0:8080",
     config=fl.server.ServerConfig(num_rounds=5),
     strategy=strategy,
 )
+
+print("✅ Federated Learning Server Started Successfully.")
