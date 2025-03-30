@@ -7,6 +7,7 @@ import numpy as np
 import json
 import logging
 import client_model as clm
+from sklearn.metrics import f1_score  # Add this import
 
 # Load shared feature metadata from the server
 with open("server_pretrain_info.json", "r") as f:
@@ -22,7 +23,7 @@ X_train = X_train.reshape(-1, shared_feature_dim, 1)
 X_test = X_test.reshape(-1, shared_feature_dim, 1)
 
 # Initialize the model
-model = clm.load_model(num_classes, learning_rate=0.0001, X_train=X_train)
+model = clm.load_model(num_classes, learning_rate=0.001, X_train=X_train)
 
 # Flower Client Definition
 class FlowerClient(fl.client.NumPyClient):
@@ -50,6 +51,11 @@ class FlowerClient(fl.client.NumPyClient):
             model, parameters, X_train, y_train, epochs=10, batch_size=32, verbose=0
         )
 
+        # Print parameters sent back to the server
+        print("📤 Sending updated parameters to server:")
+        for layer_idx, layer_weights in enumerate(model_weights):
+            print(f"  - Layer {layer_idx}: Shape {layer_weights.shape}, Mean {np.mean(layer_weights):.5f}")
+
         return model_weights, len_X, {}
 
     def evaluate(self, parameters, config):
@@ -58,8 +64,15 @@ class FlowerClient(fl.client.NumPyClient):
         loss, accuracy = clm.evaluate(model, X_test, y_test)
         print(f"🔍 Loss: {loss}, Accuracy: {accuracy}")
         logging.info(f"Loss: {loss}, Accuracy: {accuracy}")
+
+        # Calculate F1 score
+        y_pred = model.predict(X_test)
+        y_pred_classes = np.argmax(y_pred, axis=1)
+        f1 = f1_score(y_test, y_pred_classes, average='weighted')
+        print(f"🔍 F1 Score: {f1}")
+        logging.info(f"F1 Score: {f1}")
         
-        return loss, len(X_test), {"accuracy": accuracy}
+        return loss, len(X_test), {"accuracy": accuracy, "f1_score": f1}
 
 # Start Flower client
 fl.client.start_client(
