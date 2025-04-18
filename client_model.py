@@ -13,6 +13,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, LabelEncoder, On
 from sklearn.model_selection import train_test_split
 from collections import Counter
 from imblearn.over_sampling import SMOTE
+from tensorflow.keras.callbacks import EarlyStopping
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -109,12 +110,26 @@ def fit(model, parameters, X, y, epochs=1, batch_size=32, verbose=0):
     # Fix: Ensure validation data is formatted correctly
     X_train_split, X_val, y_train_split, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
 
+
+    # The line `early_stopping = EarlyStopping(...)` is creating an EarlyStopping callback object in
+    # Keras. This callback is used during the training of a neural network model to monitor a
+    # specific metric (in this case, training loss) and stop the training process early if the
+    # monitored metric stops improving.
+    early_stopping = EarlyStopping(
+    monitor="sparse_categorical_accuracy",  # Use correct metric name
+    patience=3,  # Stop after 3 epochs of no improvement
+    verbose=1,
+    mode="max",  # Since higher accuracy is better
+    restore_best_weights=True  # Restore best model weights
+)
+
     model.fit(
         X_train_split, y_train_split,
         validation_data=(X_val, y_val),
         epochs=epochs,
         batch_size=batch_size,
-        verbose=verbose
+        verbose=verbose,
+        callbacks=[early_stopping]  # Add early stopping callback
     )
 
     return model.get_weights(), len(X_train_split), {}
@@ -142,11 +157,34 @@ if __name__ == "__main__":
         exit()
 
     (X_train, y_train, X_test, y_test), num_classes = data
-    model = load_model(num_classes, learning_rate=0.0001, X_train=X_train)
+    model = load_model(num_classes, learning_rate=0.001, X_train=X_train)
     
     # Train the model
     print("🚀 Training standalone model...")
     model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=1)
+    
+    # Evaluate the model
+    loss, accuracy = model.evaluate(X_test, y_test, verbose=1)
+    print(f"✅ Final Model Evaluation - Loss: {loss}, Accuracy: {accuracy}")
+    
+    # Save the model
+    model.save("client_model.h5")
+    print("✅ Model saved as client_model.h5")
+
+
+if __name__ == "__main__":
+    data = load_data_from_csv()
+    
+    if data is None:
+        print("❌ Data loading failed. Exiting training.")
+        exit()
+
+    (X_train, y_train, X_test, y_test), num_classes = data
+    model = load_model(num_classes, learning_rate=0.001, X_train=X_train)
+    
+    # Train the model
+    print("🚀 Training standalone model...")
+    model.fit(X_train, y_train, epochs=15, batch_size=32, verbose=1)
     
     # Evaluate the model
     loss, accuracy = model.evaluate(X_test, y_test, verbose=1)

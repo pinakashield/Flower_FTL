@@ -1,0 +1,14 @@
+flwr
+torch
+pandas
+numpy
+# scikit-learn
+# scipy
+# scikit-image
+# matplotlib
+# tqdm
+# torchvision
+# transformers
+# datasets
+# accelerate
+# wandb

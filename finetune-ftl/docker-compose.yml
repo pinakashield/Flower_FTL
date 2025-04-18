@@ -1,0 +1,37 @@
+version: '3.9'
+services:
+  server:
+    build: .
+    container_name: fl_server
+    volumes:
+      - .:/app
+    command: python server.py
+    ports:
+      - "8080:8080"
+  
+  client0:
+    build: .
+    container_name: fl_client0
+    volumes:
+      - .:/app
+    command: python client.py 0
+    depends_on:
+      - server
+
+  client1:
+    build: .
+    container_name: fl_client1
+    volumes:
+      - .:/app
+    command: python client.py 1
+    depends_on:
+      - server
+
+  client2:
+    build: .
+    container_name: fl_client2
+    volumes:
+      - .:/app
+    command: python client.py 2
+    depends_on:
+      - server
