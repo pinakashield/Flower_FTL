@@ -6,12 +6,15 @@ from model import IntrusionModel
 from utils_cicids import load_dataset, get_dataloaders
 import random
 import time
+import os
+import sys
 
-# Flower client for federated learning for normal condition
-class FlowerClient(fl.client.NumPyClient):
-    def __init__(self, model, train_loader):
+# Flower client for federated learning with transfer learning
+class FlowerTransferLearningClient(fl.client.NumPyClient):
+    def __init__(self, model, train_loader, freeze_base=False):
         self.model = model
         self.train_loader = train_loader
+        self.freeze_base = freeze_base
 
     def get_parameters(self, config):
         return [val.cpu().numpy() for val in self.model.state_dict().values()]
@@ -22,7 +25,8 @@ class FlowerClient(fl.client.NumPyClient):
     def fit(self, parameters, config):
         self.set_parameters(parameters)
         self.model.train()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=0.001)
         criterion = torch.nn.CrossEntropyLoss()
 
         total_loss = 0.0
@@ -46,13 +50,18 @@ class FlowerClient(fl.client.NumPyClient):
 
         print(f"Client Training - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%")
 
-        return self.get_parameters(config), len(self.train_loader.dataset), {"loss": avg_loss, "accuracy": accuracy}
+        return self.get_parameters(config), len(self.train_loader.dataset), {"loss": avg_loss, "accuracy": accuracy, "ftl": self.freeze_base}
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)
+        self.model.eval()
+
+        # Personalized fine-tuning pass
+        print("[Client] Performing final personalization fine-tune...")
+        fine_tune(self.model, self.train_loader, epochs=2, unfreeze_all=True)
+
         return 0.0, len(self.train_loader.dataset), {}
 
-# Base class for common functionality
 class BaseClient(fl.client.NumPyClient):
     def __init__(self, model, train_loader):
         self.model = model
@@ -62,23 +71,16 @@ class BaseClient(fl.client.NumPyClient):
         return [val.cpu().numpy() for val in self.model.state_dict().values()]
 
     def set_parameters(self, parameters):
-        self.model.load_state_dict({
-            k: torch.tensor(v) for k, v in zip(self.model.state_dict().keys(), parameters)
-        })
+        self.model.load_state_dict({k: torch.tensor(v) for k, v in zip(self.model.state_dict().keys(), parameters)})
 
 class DDoSClient(BaseClient):
     def fit(self, parameters, config):
         self.set_parameters(parameters)
-
-        # Random spike delay to simulate flooding behavior and jitter
         delay = random.uniform(0.1, 0.5)
         print(f"[DDoSClient] Introducing artificial delay: {delay:.2f}s")
         time.sleep(delay)
-
-        # Large abnormal weights to simulate payload spike
         updated_params = [100 * np.random.randn(*p.shape) for p in self.get_parameters(config)]
         print(f"[DDoSClient] Sending high-magnitude random updates.")
-
         return updated_params, len(self.train_loader.dataset), {"loss": 0.0, "accuracy": 0.0}
 
     def evaluate(self, parameters, config):
@@ -104,26 +106,47 @@ class MITMClient(BaseClient):
     def evaluate(self, parameters, config):
         return 0.0, len(self.train_loader.dataset), {}
 
-if __name__ == "__main__":
-    import sys
+# Server-side utility for client personalization
 
+def fine_tune(model, dataloader, epochs=2, unfreeze_all=True):
+    if unfreeze_all:
+        for param in model.parameters():
+            param.requires_grad = True
+
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = torch.nn.CrossEntropyLoss()
+    for _ in range(epochs):
+        for x, y in dataloader:
+            optimizer.zero_grad()
+            loss = criterion(model(x), y)
+            loss.backward()
+            optimizer.step()
+
+if __name__ == "__main__":
     if len(sys.argv) < 2:
         raise ValueError("Client ID not provided. Usage: python client.py <client_id>")
     client_id = int(sys.argv[1])
 
+    is_new_client = os.environ.get("IS_NEW_CLIENT", "false").lower() == "true"
+
     X, y = load_dataset("/Users/peenalgupta/PinakaShield/GitHub/Flower_FTL_IDS/dataset/CICIDS_2017.csv")
-    client_loaders, _ = get_dataloaders(X, y, num_clients=2)
+    total_clients = int(os.environ.get("NUM_CLIENTS", "5"))
+    client_loaders, _ = get_dataloaders(X, y, num_clients=total_clients)
 
     if client_id < 0 or client_id >= len(client_loaders):
-        raise IndexError(f"Client ID {client_id} is out of range. Must be 0 or 1.")
+        raise IndexError(f"Client ID {client_id} is out of range. Must be between 0 and {len(client_loaders)-1}.")
 
     input_dim = X.shape[1]
     num_classes = len(torch.unique(y))
-    model = IntrusionModel(input_dim, num_classes)
+    model = IntrusionModel(input_dim, num_classes, freeze_base=is_new_client)
 
     if client_id == 0:
         client = DDoSClient(model, client_loaders[client_id])
+    elif client_id == 1:
+        client = MITMClient(model, client_loaders[client_id])
     else:
-        client = FlowerClient(model, client_loaders[client_id])
+        client = FlowerTransferLearningClient(model, client_loaders[client_id], freeze_base=is_new_client)
 
     fl.client.start_numpy_client(server_address="localhost:8080", client=client)
+    print(f"Client {client_id} started.")
