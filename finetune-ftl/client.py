@@ -8,6 +8,22 @@ import random
 import time
 import os
 import sys
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Accessing path variables
+LOG_PATH = os.getenv("LOG_PATH")
+DATA_PATH = os.getenv("DATA_PATH")
+DATASET_PATH = os.getenv("DATASET_PATH")
+GRAPHS_PATH = os.getenv("GRAPHS_PATH")
+
+# Accessing client parameters
+CLIENT_NUM = int(os.getenv("CLIENT_NUM"))
+CLIENT_NUM_IN_ROUND = int(os.getenv("CLIENT_NUM_IN_ROUND"))
+
+
 
 # Flower client for federated learning with transfer learning
 class FlowerTransferLearningClient(fl.client.NumPyClient):
@@ -130,9 +146,9 @@ if __name__ == "__main__":
 
     is_new_client = os.environ.get("IS_NEW_CLIENT", "false").lower() == "true"
 
-    X, y = load_dataset("/Users/peenalgupta/PinakaShield/GitHub/Flower_FTL_IDS/dataset/CICIDS_2017.csv")
-    total_clients = int(os.environ.get("NUM_CLIENTS", "5"))
-    client_loaders, _ = get_dataloaders(X, y, num_clients=total_clients)
+    X, y = load_dataset(DATASET_PATH+"CICIDS_2017.csv")
+    #total_clients = int(os.environ.get("NUM_CLIENTS", "5"))
+    client_loaders, _ = get_dataloaders(X, y, num_clients=CLIENT_NUM)
 
     if client_id < 0 or client_id >= len(client_loaders):
         raise IndexError(f"Client ID {client_id} is out of range. Must be between 0 and {len(client_loaders)-1}.")
@@ -148,5 +164,7 @@ if __name__ == "__main__":
     else:
         client = FlowerTransferLearningClient(model, client_loaders[client_id], freeze_base=is_new_client)
 
-    fl.client.start_numpy_client(server_address="localhost:8080", client=client)
+    server_address = os.getenv("SERVER_ADDRESS", "localhost:8080")
+
+    fl.client.start_numpy_client(server_address=server_address, client=client)
     print(f"Client {client_id} started.")
