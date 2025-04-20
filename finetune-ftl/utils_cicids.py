@@ -47,17 +47,6 @@ def preprocess(df):
     return X_tensor, y
 
 
-def train_test_split(X, y, test_size=0.2):
-    dataset = TensorDataset(X, y)
-    val_size = int(len(dataset) * test_size)
-    train_size = len(dataset) - val_size
-
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32)
-
-    return train_loader, val_loader
-
 
 def get_dataloaders(X, y, num_clients=5, val_split=0.1):
     dataset = TensorDataset(X, y)

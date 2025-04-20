@@ -6,20 +6,43 @@ import csv
 import os
 import matplotlib.pyplot as plt
 from datetime import datetime
+import random
 from model import IntrusionModel
 from utils_cicids import load_dataset, get_dataloaders
 from flwr.common import parameters_to_ndarrays, ndarrays_to_parameters, FitIns
 from typing import List, Tuple, Dict
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Accessing path variables
+LOG_PATH = os.getenv("LOG_PATH")
+DATA_PATH = os.getenv("DATA_PATH")
+DATASET_PATH = os.getenv("DATASET_PATH")
+GRAPHS_PATH = os.getenv("GRAPHS_PATH")
+
+#Log files#
+CLIENT_FTL_LOG = os.getenv("CLIENT_FTL_LOG")
+ROUND_METRICS_LOG = os.getenv("ROUND_METRICS_LOG")
+SUSPICIOUS_CLIENTS_LOG = os.getenv("SUSPICIOUS_CLIENTS_LOG")
+MITIGATION_LOG = os.getenv("MITIGATION_LOG")
+
+NUM_FTL_ROUNDS = int(os.getenv("NUM_FTL_ROUNDS"))
+NUM_CLIENT_SERVER = int(os.getenv("NUM_CLIENT_SERVER"))
+MAX_CLIENTS_PER_ROUND = int(os.getenv("MAX_CLIENTS_PER_ROUND"))
 
 ROUND_METRICS = []
-CLIENT_FTL_LOG = "ftl_client_log.csv"
-ROUND_METRICS_LOG = "ftl_round_metrics.csv"
+# CLIENT_FTL_LOG = "ftl_client_log.csv"
+# ROUND_METRICS_LOG = "ftl_round_metrics.csv"
 ACCURACY_TRACK = {}
 
-with open(CLIENT_FTL_LOG, mode='w', newline='') as f:
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+with open(LOG_PATH+timestamp+CLIENT_FTL_LOG, mode='w', newline='') as f:
     csv.writer(f).writerow(["timestamp", "round", "client_id", "ftl_used"])
 
-with open(ROUND_METRICS_LOG, mode='w', newline='') as f:
+with open(LOG_PATH+timestamp+ROUND_METRICS_LOG, mode='w', newline='') as f:
     csv.writer(f).writerow(["round", "avg_loss", "avg_accuracy"])
 
 def detect_drift(old_model, new_model, threshold=0.1):
@@ -61,12 +84,28 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
         self.val_loader = val_loader
         self.previous_parameters = None
         self.quarantined_clients = set()
-        self.log_file = "suspicious_clients_log.csv"
+        self.log_file = LOG_PATH+timestamp+SUSPICIOUS_CLIENTS_LOG
 
         with open(self.log_file, mode='w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(["timestamp", "round", "client_id", "update_norm", "cosine_similarity", "behavior"])
 
+    # def configure_fit(self, server_round, parameters, client_manager):
+    #     # Randomly select a subset of clients
+    #     all_clients = list(client_manager.clients)
+    #     available_count = len(all_clients)
+    #     print(f"📡 Round {server_round}: {available_count} client(s) connected.")
+
+    #     if available_count > MAX_CLIENTS_PER_ROUND:
+    #         selected_clients = random.sample(all_clients, MAX_CLIENTS_PER_ROUND)
+    #         print(f"🔄 Selecting subset of {MAX_CLIENTS_PER_ROUND} clients for training.")
+    #     else:
+    #         selected_clients = all_clients
+
+    #     fit_ins = [(client, FitIns(parameters, {})) for client in selected_clients]
+    #     return fit_ins
+
+    
     @staticmethod
     def aggregate_fit_metrics(metrics):
         accuracies = [m["accuracy"] for m in metrics if "accuracy" in m]
@@ -84,7 +123,7 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
 
     def mitigate_attack(self, client_id):
         print(f"🛡️ Mitigation in progress for client {client_id}...")
-        with open("mitigation_actions.log", mode='a') as log_file:
+        with open(LOG_PATH+timestamp+MITIGATION_LOG, mode='a') as log_file:
             log_file.write(f"{datetime.utcnow().isoformat()} - Mitigated client {client_id}\n")
 
     def aggregate_fit(self, rnd, results, failures):
@@ -104,7 +143,7 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
 
             ftl_used = fit_res.metrics.get("ftl", False)
             print(f" - {cid}: Update norm={update_norm:.2f}, CosSim={sim:.2f}, FTL: {ftl_used}")
-            with open(CLIENT_FTL_LOG, mode='a', newline='') as f:
+            with open(LOG_PATH+CLIENT_FTL_LOG, mode='a', newline='') as f:
                 csv.writer(f).writerow([datetime.utcnow().isoformat(), rnd, cid, ftl_used])
 
             if update_norm > 100 or sim < -0.5:
@@ -149,7 +188,7 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
         avg_loss = np.mean(all_losses)
         avg_accuracy = np.mean(all_accuracies)
 
-        with open(ROUND_METRICS_LOG, mode='a', newline='') as f:
+        with open(LOG_PATH+ROUND_METRICS_LOG, mode='a', newline='') as f:
             csv.writer(f).writerow([rnd, avg_loss, avg_accuracy])
 
         ROUND_METRICS.append((rnd, avg_loss, avg_accuracy))
@@ -168,12 +207,12 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
         plt.title("Federated Learning Metrics Over Time")
         plt.legend()
         plt.grid(True)
-        plt.savefig("ftl_training_metrics.png")
+        plt.savefig(GRAPHS_PATH+"ftl_training_metrics.png")
         print("📊 Training metrics plot saved as 'ftl_training_metrics.png'")
 
 if __name__ == "__main__":
-    X, y = load_dataset("/Users/peenalgupta/PinakaShield/GitHub/Flower_FTL_IDS/dataset/CICIDS_2017.csv")
-    _, val_loader = get_dataloaders(X, y, num_clients=2)
+    X, y = load_dataset(DATASET_PATH+"CICIDS_2017.csv")
+    _, val_loader = get_dataloaders(X, y, NUM_CLIENT_SERVER)
     input_dim = X.shape[1]
     num_classes = len(torch.unique(y))
 
@@ -193,7 +232,7 @@ if __name__ == "__main__":
     strategy = FineTuningStrategy(lambda: copy.deepcopy(model), val_loader)
     fl.server.start_server(
         server_address="localhost:8080",
-        config=fl.server.ServerConfig(num_rounds=5),
+        config=fl.server.ServerConfig(NUM_FTL_ROUNDS),
         strategy=strategy,
     )
 
