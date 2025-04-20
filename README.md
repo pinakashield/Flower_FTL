@@ -1,7 +1,3 @@
-Perfect! Here's your updated, comprehensive **`README.md`** including **attack simulation**, **detection**, and **mitigation strategies** along with everything else in your Federated Transfer Learning Intrusion Detection project:
-
----
-
 # 🛡️ Federated Transfer Learning for Intrusion Detection
 
 This project implements a powerful **Intrusion Detection and Mitigation System** using **Federated Transfer Learning (FTL)**. It enables decentralized detection of **DDoS**, **MITM**, and other anomalies in network traffic using the [Flower](https://flower.dev) federated learning framework and [PyTorch](https://pytorch.org/).
@@ -164,7 +160,3 @@ We welcome PRs that:
 ## 📜 License
 
 MIT License © 2025
-
----
-
-Would you like me to now generate the `requirements.txt` file based on your full project stack?
