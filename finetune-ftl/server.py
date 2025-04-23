@@ -102,6 +102,7 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
     #     else:
     #         selected_clients = all_clients
 
+
     #     fit_ins = [(client, FitIns(parameters, {})) for client in selected_clients]
     #     return fit_ins
 
@@ -188,7 +189,8 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
         avg_loss = np.mean(all_losses)
         avg_accuracy = np.mean(all_accuracies)
 
-        with open(LOG_PATH+ROUND_METRICS_LOG, mode='a', newline='') as f:
+
+        with open(os.path.join(LOG_PATH, ROUND_METRICS_LOG), mode='a', newline='') as f:
             csv.writer(f).writerow([rnd, avg_loss, avg_accuracy])
 
         ROUND_METRICS.append((rnd, avg_loss, avg_accuracy))

@@ -147,14 +147,14 @@ if __name__ == "__main__":
     is_new_client = os.environ.get("IS_NEW_CLIENT", "false").lower() == "true"
 
     X, y = load_dataset(DATASET_PATH+"CICIDS_2017.csv")
-    #total_clients = int(os.environ.get("NUM_CLIENTS", "5"))
+    # Ensure num_classes matches the server's configuration
+    num_classes = int(os.getenv("NUM_CLASSES", len(torch.unique(y))))  # Default to dataset's unique labels
     client_loaders, _ = get_dataloaders(X, y, num_clients=CLIENT_NUM)
 
     if client_id < 0 or client_id >= len(client_loaders):
         raise IndexError(f"Client ID {client_id} is out of range. Must be between 0 and {len(client_loaders)-1}.")
 
     input_dim = X.shape[1]
-    num_classes = len(torch.unique(y))
     model = IntrusionModel(input_dim, num_classes, freeze_base=is_new_client)
 
     if client_id == 0:
