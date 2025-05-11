@@ -21,6 +21,7 @@ LOG_PATH = os.getenv("LOG_PATH")
 DATA_PATH = os.getenv("DATA_PATH")
 DATASET_PATH = os.getenv("DATASET_PATH")
 GRAPHS_PATH = os.getenv("GRAPHS_PATH")
+SERVER_ADDRESS = os.getenv("SERVER_ADDRESS")
 
 #Log files#
 CLIENT_FTL_LOG = os.getenv("CLIENT_FTL_LOG")
@@ -36,7 +37,7 @@ ROUND_METRICS = []
 # CLIENT_FTL_LOG = "ftl_client_log.csv"
 # ROUND_METRICS_LOG = "ftl_round_metrics.csv"
 ACCURACY_TRACK = {}
-
+ 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 with open(LOG_PATH+timestamp+CLIENT_FTL_LOG, mode='w', newline='') as f:
@@ -233,7 +234,7 @@ if __name__ == "__main__":
 
     strategy = FineTuningStrategy(lambda: copy.deepcopy(model), val_loader)
     fl.server.start_server(
-        server_address="localhost:8080",
+        server_address=SERVER_ADDRESS,
         config=fl.server.ServerConfig(NUM_FTL_ROUNDS),
         strategy=strategy,
     )
