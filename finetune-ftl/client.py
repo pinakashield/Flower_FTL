@@ -18,6 +18,7 @@ LOG_PATH = os.getenv("LOG_PATH")
 DATA_PATH = os.getenv("DATA_PATH")
 DATASET_PATH = os.getenv("DATASET_PATH")
 GRAPHS_PATH = os.getenv("GRAPHS_PATH")
+SERVER_ADDRESS = os.getenv("SERVER_ADDRESS")
 
 # Accessing client parameters
 CLIENT_NUM = int(os.getenv("CLIENT_NUM"))
@@ -164,7 +165,7 @@ if __name__ == "__main__":
     else:
         client = FlowerTransferLearningClient(model, client_loaders[client_id], freeze_base=is_new_client)
 
-    server_address = os.getenv("SERVER_ADDRESS", "localhost:8080")
+    server_address = os.getenv("SERVER_ADDRESS", SERVER_ADDRESS)
 
     fl.client.start_numpy_client(server_address=server_address, client=client)
     print(f"Client {client_id} started.")
