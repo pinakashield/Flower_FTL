@@ -214,7 +214,7 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
         print("📊 Training metrics plot saved as 'ftl_training_metrics.png'")
 
 if __name__ == "__main__":
-    X, y = load_dataset(DATASET_PATH+"CICIDS_2017.csv")
+    X, y = load_dataset(DATASET_PATH+"output_file.csv") #CICIDS_2017.csv
     _, val_loader = get_dataloaders(X, y, NUM_CLIENT_SERVER)
     input_dim = X.shape[1]
     num_classes = len(torch.unique(y))
@@ -234,7 +234,7 @@ if __name__ == "__main__":
 
     strategy = FineTuningStrategy(lambda: copy.deepcopy(model), val_loader)
     fl.server.start_server(
-        server_address=SERVER_ADDRESS,
+        server_address="localhost:8080",
         config=fl.server.ServerConfig(NUM_FTL_ROUNDS),
         strategy=strategy,
     )

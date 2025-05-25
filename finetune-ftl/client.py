@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
     is_new_client = os.environ.get("IS_NEW_CLIENT", "false").lower() == "true"
 
-    X, y = load_dataset(DATASET_PATH+"CICIDS_2017.csv")
+    X, y = load_dataset(DATASET_PATH+"output_file.csv") #CICIDS_2017.csv
     # Ensure num_classes matches the server's configuration
     num_classes = int(os.getenv("NUM_CLASSES", len(torch.unique(y))))  # Default to dataset's unique labels
     client_loaders, _ = get_dataloaders(X, y, num_clients=CLIENT_NUM)
