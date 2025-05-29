@@ -37,10 +37,32 @@ class FlowerTransferLearningClient(fl.client.NumPyClient):
         return [val.cpu().numpy() for val in self.model.state_dict().values()]
 
     def set_parameters(self, parameters):
-        self.model.load_state_dict({k: torch.tensor(v) for k, v in zip(self.model.state_dict().keys(), parameters)})
+        """Safely load parameters into model, handling shape mismatches"""
+        try:
+            new_state_dict = {}
+            state_dict = self.model.state_dict()
+            for (name, current_tensor), param_array in zip(state_dict.items(), parameters):
+                try:
+                    param_tensor = torch.tensor(param_array)
+                    if param_tensor.shape == current_tensor.shape:
+                        new_state_dict[name] = param_tensor
+                    else:
+                        print(f"Skipping parameter {name} due to shape mismatch: got {param_tensor.shape}, expected {current_tensor.shape}")
+                        new_state_dict[name] = current_tensor
+                except Exception as e:
+                    print(f"Error loading parameter {name}: {str(e)}")
+                    new_state_dict[name] = current_tensor
+                
+            self.model.load_state_dict(new_state_dict, strict=False)
+        except Exception as e:
+            print(f"Error setting parameters: {str(e)}")
+            return False
+        return True
 
     def fit(self, parameters, config):
-        self.set_parameters(parameters)
+        """Train the model on the locally held training set"""
+        if not self.set_parameters(parameters):
+            print("Warning: Using original model parameters due to loading error")
         self.model.train()
 
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=0.001)
@@ -88,7 +110,27 @@ class BaseClient(fl.client.NumPyClient):
         return [val.cpu().numpy() for val in self.model.state_dict().values()]
 
     def set_parameters(self, parameters):
-        self.model.load_state_dict({k: torch.tensor(v) for k, v in zip(self.model.state_dict().keys(), parameters)})
+        """Safely load parameters into model, handling shape mismatches"""
+        try:
+            new_state_dict = {}
+            state_dict = self.model.state_dict()
+            for (name, current_tensor), param_array in zip(state_dict.items(), parameters):
+                try:
+                    param_tensor = torch.tensor(param_array)
+                    if param_tensor.shape == current_tensor.shape:
+                        new_state_dict[name] = param_tensor
+                    else:
+                        print(f"Skipping parameter {name} due to shape mismatch: got {param_tensor.shape}, expected {current_tensor.shape}")
+                        new_state_dict[name] = current_tensor
+                except Exception as e:
+                    print(f"Error loading parameter {name}: {str(e)}")
+                    new_state_dict[name] = current_tensor
+                
+            self.model.load_state_dict(new_state_dict, strict=False)
+        except Exception as e:
+            print(f"Error setting parameters: {str(e)}")
+            return False
+        return True
 
 class DDoSClient(BaseClient):
     def fit(self, parameters, config):
@@ -147,10 +189,10 @@ if __name__ == "__main__":
 
     is_new_client = os.environ.get("IS_NEW_CLIENT", "false").lower() == "true"
 
-    X, y = load_dataset(DATASET_PATH+"output_file.csv") #CICIDS_2017.csv
+    X, y = load_dataset(DATASET_PATH+"CICIDS_2017.csv") #CICIDS_2017.csv
     # Ensure num_classes matches the server's configuration
     num_classes = int(os.getenv("NUM_CLASSES", len(torch.unique(y))))  # Default to dataset's unique labels
-    client_loaders, _ = get_dataloaders(X, y, num_clients=CLIENT_NUM)
+    client_loaders, _, _ = get_dataloaders(X, y, num_clients=CLIENT_NUM)
 
     if client_id < 0 or client_id >= len(client_loaders):
         raise IndexError(f"Client ID {client_id} is out of range. Must be between 0 and {len(client_loaders)-1}.")
