@@ -9,6 +9,7 @@ import time
 import os
 import sys
 from dotenv import load_dotenv
+from attack_simulator import AttackSimulatorClient
 
 # Load environment variables from .env file
 load_dotenv()
@@ -147,7 +148,7 @@ if __name__ == "__main__":
 
     is_new_client = os.environ.get("IS_NEW_CLIENT", "false").lower() == "true"
 
-    X, y = load_dataset(DATASET_PATH+"output_file.csv") #CICIDS_2017.csv
+    X, y = load_dataset(DATASET_PATH+"CICIDS_2017.csv") #CICIDS_2017.csv
     # Ensure num_classes matches the server's configuration
     num_classes = int(os.getenv("NUM_CLASSES", len(torch.unique(y))))  # Default to dataset's unique labels
     client_loaders, _ = get_dataloaders(X, y, num_clients=CLIENT_NUM)
@@ -158,10 +159,22 @@ if __name__ == "__main__":
     input_dim = X.shape[1]
     model = IntrusionModel(input_dim, num_classes, freeze_base=is_new_client)
 
+    # Attack simulation parameters from environment
+    ATTACK_TYPE = os.getenv("ATTACK_TYPE", "ddos").lower()
+    ATTACK_PARAMS = {
+        "target_ip": os.getenv("TARGET_IP", "127.0.0.1"),
+        "target_port": int(os.getenv("TARGET_PORT", "8080")),
+        "gateway_ip": os.getenv("GATEWAY_IP", "192.168.1.1"),
+        "iface": os.getenv("IFACE", "eth0"),
+    }
+
     if client_id == 0:
         client = DDoSClient(model, client_loaders[client_id])
+   # elif client_id == 1:
+        #client = MITMClient(model, client_loaders[client_id])
     elif client_id == 1:
-        client = MITMClient(model, client_loaders[client_id])
+        # Use AttackSimulatorClient for attack simulation
+        client = AttackSimulatorClient(model, client_loaders[client_id], attack_type=ATTACK_TYPE, attack_params=ATTACK_PARAMS)
     else:
         client = FlowerTransferLearningClient(model, client_loaders[client_id], freeze_base=is_new_client)
 

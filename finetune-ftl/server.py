@@ -5,7 +5,7 @@ import numpy as np
 import csv
 import os
 import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime, timezone
 import random
 from model import IntrusionModel
 from utils_cicids import load_dataset, get_dataloaders
@@ -24,10 +24,10 @@ GRAPHS_PATH = os.getenv("GRAPHS_PATH")
 SERVER_ADDRESS = os.getenv("SERVER_ADDRESS")
 
 #Log files#
-CLIENT_FTL_LOG = os.getenv("CLIENT_FTL_LOG")
-ROUND_METRICS_LOG = os.getenv("ROUND_METRICS_LOG")
-SUSPICIOUS_CLIENTS_LOG = os.getenv("SUSPICIOUS_CLIENTS_LOG")
-MITIGATION_LOG = os.getenv("MITIGATION_LOG")
+CLIENT_FTL_LOG = LOG_PATH + os.getenv("CLIENT_FTL_LOG")
+ROUND_METRICS_LOG = LOG_PATH + os.getenv("ROUND_METRICS_LOG")
+SUSPICIOUS_CLIENTS_LOG = LOG_PATH + os.getenv("SUSPICIOUS_CLIENTS_LOG")
+MITIGATION_LOG = LOG_PATH + os.getenv("MITIGATION_LOG")
 
 NUM_FTL_ROUNDS = int(os.getenv("NUM_FTL_ROUNDS"))
 NUM_CLIENT_SERVER = int(os.getenv("NUM_CLIENT_SERVER"))
@@ -38,13 +38,13 @@ ROUND_METRICS = []
 # ROUND_METRICS_LOG = "ftl_round_metrics.csv"
 ACCURACY_TRACK = {}
  
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+timestamp = datetime.now().strftime("%Y%m%d")
 
-with open(LOG_PATH+timestamp+CLIENT_FTL_LOG, mode='w', newline='') as f:
+with open(CLIENT_FTL_LOG, mode='w', newline='') as f:
     csv.writer(f).writerow(["timestamp", "round", "client_id", "ftl_used"])
 
-with open(LOG_PATH+timestamp+ROUND_METRICS_LOG, mode='w', newline='') as f:
-    csv.writer(f).writerow(["round", "avg_loss", "avg_accuracy"])
+with open(ROUND_METRICS_LOG, mode='w', newline='') as f:
+    csv.writer(f).writerow(["timestamp","round", "avg_loss", "avg_accuracy"])
 
 def detect_drift(old_model, new_model, threshold=0.1):
     diff = sum(torch.norm(p1 - p2) for p1, p2 in zip(old_model.parameters(), new_model.parameters()))
@@ -68,7 +68,7 @@ def fine_tune(model, val_loader, epochs=2, unfreeze_all=False):
 def compute_update_norm(parameters: List[np.ndarray]) -> float:
     return np.sqrt(sum(np.linalg.norm(p)**2 for p in parameters))
 
-def cosine_similarity(params1: List[np.ndarray], params2: List[np.ndarray]) -> float:
+def cosine_similarity(params1: List[np.ndarray], params2: List[np.ndarray] ) -> float:
     flat1 = np.concatenate([p.flatten() for p in params1])
     flat2 = np.concatenate([p.flatten() for p in params2])
     dot = np.dot(flat1, flat2)
@@ -85,11 +85,14 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
         self.val_loader = val_loader
         self.previous_parameters = None
         self.quarantined_clients = set()
-        self.log_file = LOG_PATH+timestamp+SUSPICIOUS_CLIENTS_LOG
+        self.log_file = SUSPICIOUS_CLIENTS_LOG
+        self.attack_log_file = LOG_PATH+timestamp+"attack_detection_log.csv"
 
         with open(self.log_file, mode='w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(["timestamp", "round", "client_id", "update_norm", "cosine_similarity", "behavior"])
+            csv.writer(f).writerow(["timestamp", "round", "client_id", "update_norm", "cosine_similarity", "behavior"])
+
+        with open(self.attack_log_file, mode='w', newline='') as f:
+            csv.writer(f).writerow(["timestamp", "round", "client_id", "attack_type", "action"])
 
     # def configure_fit(self, server_round, parameters, client_manager):
     #     # Randomly select a subset of clients
@@ -121,12 +124,67 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
     def log_client(self, rnd, cid, norm, sim, label):
         with open(self.log_file, mode='a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([datetime.utcnow().isoformat(), rnd, cid, norm, sim, label])
+            writer.writerow([datetime.now(timezone.utc).isoformat(), rnd, cid, norm, sim, label])
 
     def mitigate_attack(self, client_id):
         print(f"🛡️ Mitigation in progress for client {client_id}...")
-        with open(LOG_PATH+timestamp+MITIGATION_LOG, mode='a') as log_file:
-            log_file.write(f"{datetime.utcnow().isoformat()} - Mitigated client {client_id}\n")
+        with open(MITIGATION_LOG, mode='a') as log_file:
+            log_file.write(f"{datetime.now(timezone.utc).isoformat()} - Mitigated client {client_id}\n")
+
+    def detect_attack(self, rnd, cid, fit_res):
+        # Simple threshold-based detection for illustration
+        update_norm = compute_update_norm(parameters_to_ndarrays(fit_res.parameters))
+        sim = cosine_similarity(parameters_to_ndarrays(fit_res.parameters), self.previous_parameters) if self.previous_parameters else 1.0
+
+        print(f" - {cid}: Update norm={update_norm:.2f}, CosSim={sim:.2f}")
+
+        # Log suspicious client behavior
+        if update_norm > 100 or sim < -0.5:
+            label = "DDoS" if update_norm > 100 else "MITM"
+            self.log_client(rnd, cid, update_norm, sim, label)
+            self.mitigate_attack(cid)
+            self.generate_alert(cid, label, "Quarantined (anomaly)")
+            return True  # Attack detected
+
+        return False  # No attack detected
+
+    def log_attack(self, rnd, cid, attack_type, action):
+        with open(self.attack_log_file, mode='a', newline='') as f:
+            csv.writer(f).writerow([datetime.now(timezone.utc).isoformat(), rnd, cid, attack_type, action])
+
+    def generate_alert(self, cid, attack_type, action):
+        alert_msg = f"🚨 ALERT: Attack detected from client {cid} (type: {attack_type}). Action: {action}"
+        print(alert_msg)
+        with open(LOG_PATH+"alerts.log", mode='a') as alert_file:
+            alert_file.write(f"{datetime.now(timezone.utc).isoformat()} - {alert_msg}\n")
+
+    def detect_and_mitigate_attack(self, rnd, cid, fit_res):
+        """Detect attacks from both metrics and anomalies."""
+        # Check for reported attack type
+        attack_type = fit_res.metrics.get("attack_type", "none")
+        if attack_type != "none":
+            action = f"Quarantined (reported {attack_type})"
+            self.quarantined_clients.add(cid)
+            self.log_attack(rnd, cid, attack_type, action)
+            self.generate_alert(cid, attack_type, action)
+            return True
+
+        # Check for anomalous behavior
+        params = parameters_to_ndarrays(fit_res.parameters)
+        update_norm = compute_update_norm(params)
+        sim = cosine_similarity(params, self.previous_parameters) if self.previous_parameters else 1.0
+
+        if update_norm > 100 or sim < -0.5:
+            attack_type = "DDoS" if update_norm > 100 else "MITM"
+            action = "Quarantined (anomaly)"
+            self.quarantined_clients.add(cid)
+            self.log_client(rnd, cid, update_norm, sim, attack_type)
+            self.log_attack(rnd, cid, attack_type, action)
+            self.generate_alert(cid, attack_type, action)
+            self.mitigate_attack(cid)
+            return True
+
+        return False
 
     def aggregate_fit(self, rnd, results, failures):
         print(f"\n[Round {rnd}] Client Update Monitoring:")
@@ -135,36 +193,28 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
 
         for client_proxy, fit_res in results:
             cid = client_proxy.cid
+            
             if cid in self.quarantined_clients:
                 print(f"❌ Skipping quarantined client {cid}")
+                results.remove((client_proxy, fit_res))
                 continue
 
+            # Check for attacks
+            if self.detect_and_mitigate_attack(rnd, cid, fit_res):
+                print(f"❌ Skipping client {cid} due to detected attack")
+                results.remove((client_proxy, fit_res))
+                continue
+
+            # Process valid client updates
             params = parameters_to_ndarrays(fit_res.parameters)
-            update_norm = compute_update_norm(params)
-            sim = cosine_similarity(params, self.previous_parameters) if self.previous_parameters else 1.0
-
-            ftl_used = fit_res.metrics.get("ftl", False)
-            print(f" - {cid}: Update norm={update_norm:.2f}, CosSim={sim:.2f}, FTL: {ftl_used}")
-            with open(LOG_PATH+CLIENT_FTL_LOG, mode='a', newline='') as f:
-                csv.writer(f).writerow([datetime.utcnow().isoformat(), rnd, cid, ftl_used])
-
-            if update_norm > 100 or sim < -0.5:
-                print(f"🚫 Quarantining client {cid} for suspicious behavior")
-                self.quarantined_clients.add(cid)
-                label = "DDoS" if update_norm > 100 else "MITM"
-                self.log_client(rnd, cid, update_norm, sim, label)
-                self.mitigate_attack(cid)
-                continue
-
-            self.log_client(rnd, cid, update_norm, sim, "Normal")
-            filtered_results.append((client_proxy, fit_res))
-
             if self.previous_parameters is None:
                 self.previous_parameters = params
 
+            filtered_results.append((client_proxy, fit_res))
             all_losses.append(fit_res.metrics.get("loss", 0))
             all_accuracies.append(fit_res.metrics.get("accuracy", 0))
-            # Track accuracy over time
+            
+            # Track accuracy
             if cid not in ACCURACY_TRACK:
                 ACCURACY_TRACK[cid] = []
             ACCURACY_TRACK[cid].append(fit_res.metrics.get("accuracy", 0))
@@ -192,29 +242,37 @@ class FineTuningStrategy(fl.server.strategy.FedAvg):
 
 
         with open(os.path.join(LOG_PATH, ROUND_METRICS_LOG), mode='a', newline='') as f:
-            csv.writer(f).writerow([rnd, avg_loss, avg_accuracy])
+            csv.writer(f).writerow([datetime.now(timezone.utc).isoformat(), rnd, avg_loss, avg_accuracy])
 
-        ROUND_METRICS.append((rnd, avg_loss, avg_accuracy))
-
+        # Store metrics as a tuple with exactly 3 values
+        ROUND_METRICS.append((rnd, float(avg_loss), float(avg_accuracy)))
+        
         return ndarrays_to_parameters(aggregated_ndarrays), {"loss": avg_loss, "accuracy": avg_accuracy}
 
     def visualize_metrics(self):
         if not ROUND_METRICS:
             return
-        rounds, losses, accuracies = zip(*ROUND_METRICS)
-        plt.figure()
-        plt.plot(rounds, losses, label="Loss")
-        plt.plot(rounds, accuracies, label="Accuracy")
-        plt.xlabel("Round")
-        plt.ylabel("Metric")
-        plt.title("Federated Learning Metrics Over Time")
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(GRAPHS_PATH+"ftl_training_metrics.png")
-        print("📊 Training metrics plot saved as 'ftl_training_metrics.png'")
+        try:
+            # Safely unpack the metrics
+            rounds, losses, accuracies = map(list, zip(*ROUND_METRICS))
+            
+            plt.figure(figsize=(10, 6))
+            plt.plot(rounds, losses, 'r-', label="Loss", marker='o')
+            plt.plot(rounds, accuracies, 'b-', label="Accuracy", marker='s')
+            plt.xlabel("Round")
+            plt.ylabel("Metric Value")
+            plt.title("Federated Learning Metrics Over Time")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(os.path.join(GRAPHS_PATH, f"ftl_training_metrics_{timestamp}.png"))
+            print("📊 Training metrics plot saved")
+        except Exception as e:
+            print(f"Error during visualization: {e}")
+            print(f"Current metrics structure: {ROUND_METRICS}")
 
 if __name__ == "__main__":
-    X, y = load_dataset(DATASET_PATH+"output_file.csv") #CICIDS_2017.csv
+    X, y = load_dataset(DATASET_PATH+"CICIDS_2017.csv") #CICIDS_2017.csv
     _, val_loader = get_dataloaders(X, y, NUM_CLIENT_SERVER)
     input_dim = X.shape[1]
     num_classes = len(torch.unique(y))
